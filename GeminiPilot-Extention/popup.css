@@ -1,0 +1,24 @@
+
+body { 
+    width: 380px; 
+    height: 550px; 
+    font-family: 'Inter', sans-serif; 
+    background-color: #111827; /* bg-gray-900 */
+}
+::-webkit-scrollbar { 
+    width: 6px; 
+}
+::-webkit-scrollbar-track { 
+    background: #1f2937; /* bg-gray-800 */
+}
+::-webkit-scrollbar-thumb { 
+    background: #4b5563; 
+    border-radius: 10px; 
+}
+.chat-bubble-user {
+    background-color: #2563eb; /* bg-blue-600 */
+}
+.chat-bubble-assistant {
+    background-color: #374151; /* bg-gray-700 */
+}
+       

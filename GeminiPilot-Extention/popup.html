@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeminiPilot By Cyberscap</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="popup.css" rel="stylesheet">
+</head>
+<body class="text-white flex flex-col h-full">
+    <!-- Header -->
+    <div class="p-3 border-b border-gray-700 flex justify-between items-center bg-gradient-to-r from-gray-800 to-gray-900 shadow-md">
+        <div class="flex items-center space-x-2">
+            <svg class="w-6 h-6 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12.0006 18.26L4.94715 22.2082L6.52248 14.2799L0.587891 8.7918L8.61483 7.84006L12.0006 0.5L15.3864 7.84006L23.4133 8.7918L17.4787 14.2799L19.054 22.2082L12.0006 18.26Z"></path></svg>
+            <h1 class="text-lg font-bold text-gray-200">GeminiPilot (Beta)</h1>
+        </div>
+        <div class="flex items-center space-x-2">
+            <button id="cancel-btn" class="hidden bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-md text-sm font-semibold">Cancel</button>
+            <button id="clear-btn" class="text-gray-400 hover:text-white" title="Clear conversation">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Chat Container -->
+    <div id="chat-container" class="flex-1 p-4 overflow-y-auto space-y-6">
+        <!-- Chat messages will be dynamically loaded here -->
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator" class="hidden px-4 pb-2 flex items-center">
+        <div class="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-400"></div>
+        <p id="loading-text" class="ml-3 text-sm text-gray-400">Thinking...</p>
+    </div>
+
+    <!-- Input Form -->
+    <div class="p-3 border-t border-gray-700 bg-gray-900">
+        <form id="prompt-form" class="flex items-center space-x-3">
+            <input type="text" id="prompt-input" class="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-200" placeholder="Ask me to do something on this page..." autocomplete="off">
+            <button type="submit" class="bg-blue-600 hover:bg-blue-700 rounded-lg p-2.5 text-white">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+        </form>
+    </div>
+    <script src="popup.js"></script>
+</body>
+</html>
