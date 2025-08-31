@@ -42,6 +42,34 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.storage.local.remove(CHAT_HISTORY_KEY);
     });
 
+    // --- NEW: Event listener for copy buttons ---
+    chatContainer.addEventListener('click', (e) => {
+        if (e.target.classList.contains('copy-code-btn')) {
+            const pre = e.target.closest('.relative').querySelector('pre');
+            const code = pre.textContent;
+            
+            navigator.clipboard.writeText(code).then(() => {
+                e.target.textContent = 'Copied!';
+                setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy text: ', err);
+                // Fallback for older browsers or if clipboard API fails
+                const textArea = document.createElement("textarea");
+                textArea.value = code;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    e.target.textContent = 'Copied!';
+                    setTimeout(() => { e.target.textContent = 'Copy'; }, 2000);
+                } catch (fallbackErr) {
+                    console.error('Fallback copy failed: ', fallbackErr);
+                }
+                document.body.removeChild(textArea);
+            });
+        }
+    });
+
     // --- Helper Functions ---
 
     function handleStatusUpdate(request) {
@@ -74,12 +102,40 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div class="max-w-xs ${sender === 'user' ? 'order-1' : 'order-2'}">
                 <div class="px-4 py-2 rounded-lg ${bubbleClass}">
-                    <p class="text-sm text-gray-100">${text}</p>
+                    <!-- Content will be injected here -->
                 </div>
                 <p class="text-xs text-gray-500 mt-1 px-1">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
             </div>
         `;
         
+        const bubbleContent = messageElement.querySelector('.px-4.py-2');
+        const textP = document.createElement('p');
+        textP.className = 'text-sm text-gray-100 whitespace-pre-wrap';
+
+        // --- NEW: Logic to render code blocks ---
+        if (text.includes('```javascript')) {
+            const [reasonPart, ...codeParts] = text.split('```javascript');
+            const code = codeParts.join('```javascript').split('```')[0].trim();
+            
+            textP.textContent = reasonPart.trim();
+            bubbleContent.innerHTML = ''; // Clear existing
+            bubbleContent.appendChild(textP);
+            
+            const codeContainer = document.createElement('div');
+            codeContainer.className = 'mt-2 bg-gray-900 rounded-md p-2 relative';
+            codeContainer.innerHTML = `
+                <pre class="text-xs text-gray-300 overflow-x-auto"><code></code></pre>
+                <button class="copy-code-btn absolute top-1 right-1 bg-gray-700 hover:bg-gray-600 text-gray-300 px-2 py-1 text-xs rounded">Copy</button>
+            `;
+            codeContainer.querySelector('code').textContent = code; // Safely set code text
+            bubbleContent.appendChild(codeContainer);
+            
+        } else {
+            textP.textContent = text;
+            bubbleContent.innerHTML = '';
+            bubbleContent.appendChild(textP);
+        }
+
         chatContainer.appendChild(messageElement);
         chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -91,8 +147,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveChatHistory() {
         chrome.storage.local.get([CHAT_HISTORY_KEY], (result) => {
             const history = result[CHAT_HISTORY_KEY] || [];
+            const lastMessageText = chatContainer.lastChild.querySelector('.px-4.py-2').textContent; // Simplified for storage
             const lastMessage = { 
-                text: chatContainer.lastChild.querySelector('p.text-sm').textContent,
+                text: lastMessageText,
                 sender: chatContainer.lastChild.querySelector('.order-2') ? 'user' : 'assistant'
             };
             history.push(lastMessage);
@@ -111,3 +168,4 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 });
+

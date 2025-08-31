@@ -2,9 +2,7 @@
 let taskState = {
     isRunning: false,
     originalPrompt: null,
-    history: [],
     tabId: null,
-    waitingForUpdate: false,
 };
 
 // Main message listener
@@ -12,160 +10,151 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'START_TASK') {
         if (taskState.isRunning) {
             console.warn("A task is already in progress.");
+            updatePopup({ message: "A task is already running. Please wait or cancel.", loading: false });
             return;
         }
-        initializeTask(request.prompt);
+        runTask(request.prompt);
     } else if (request.type === 'CANCEL_TASK') {
-        cancelTask();
+        taskState.isRunning = false;
+        updatePopup({ message: "Task cancelled.", loading: false, taskStatus: 'idle' });
     }
 });
 
-function cancelTask() {
-    if (taskState.isRunning) {
-        taskState.isRunning = false;
-        taskState.waitingForUpdate = false;
-        chrome.alarms.clearAll();
-        chrome.tabs.onUpdated.removeListener(tabUpdateListener);
-        console.log("Task cancelled by user.");
-        updatePopup({ 
-            message: "Task cancelled.", 
-            loading: false, 
-            taskStatus: 'idle' 
-        });
-    }
-}
-
-async function initializeTask(prompt) {
+async function runTask(prompt) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab) {
         updatePopup({ message: "Error: No active tab found.", loading: false, taskStatus: 'idle' });
         return;
     }
 
-    taskState = {
-        isRunning: true,
-        originalPrompt: prompt,
-        history: [`User's goal: ${prompt}`],
-        tabId: tab.id,
-        waitingForUpdate: false,
-    };
-
-    updatePopup({ loading: true, loadingText: "Starting...", taskStatus: 'running' });
-    taskLoop();
-}
-
-async function taskLoop() {
-    if (!taskState.isRunning) {
-        console.log("Task loop stopped.");
-        return;
-    }
+    taskState.isRunning = true;
+    taskState.originalPrompt = prompt;
+    taskState.tabId = tab.id;
 
     try {
-        updatePopup({ loading: true, loadingText: "Reading the page...", taskStatus: 'running' });
+        updatePopup({ loading: true, loadingText: "Analyzing the page...", taskStatus: 'running' });
         const injectionResults = await chrome.scripting.executeScript({
             target: { tabId: taskState.tabId },
             func: getPageContent,
         });
         const pageContent = injectionResults[0].result;
 
-        const historySummary = [taskState.history[0]];
-        if (taskState.history.length > 1) {
-            historySummary.push(...taskState.history.slice(-4)); 
-        }
-
-        updatePopup({ loading: true, loadingText: "Deciding next action...", taskStatus: 'running' });
-        const result = await callGeminiApi(taskState.originalPrompt, historySummary, pageContent);
+        updatePopup({ loading: true, loadingText: "Generating automation script...", taskStatus: 'running' });
+        const result = await callGeminiApi(prompt, pageContent, tab.url);
 
         if (!taskState.isRunning) return;
 
-        if (result.action === "finish") {
-            taskState.isRunning = false;
-            updatePopup({ message: result.summary || "Task finished!", loading: false, taskStatus: 'idle' });
-        } else {
-            taskState.history.push(`Assistant's next action: ${JSON.stringify(result)}`);
-            updatePopup({ message: `Action: ${result.action} on "${result.selector || result.url}"`, loading: true, loadingText: "Executing...", taskStatus: 'running' });
+        await executeFinalAction(result);
 
-            const actionResult = await executeAction(result);
-            if (!taskState.isRunning) return;
-
-            taskState.history.push(`Action result: ${actionResult || "No result"}`);
-            
-            waitForNextStep(result.action);
-        }
     } catch (error) {
-        console.error("Error in task loop:", error);
+        console.error("Error in runTask:", error);
         updatePopup({ message: `Error: ${error.message}`, loading: false, taskStatus: 'idle' });
+    } finally {
         taskState.isRunning = false;
     }
 }
 
-function waitForNextStep(actionType) {
-    if (['click', 'fill', 'navigate', 'enter'].includes(actionType)) {
-        taskState.waitingForUpdate = true;
-        chrome.alarms.create('pageUpdateTimeout', { delayInMinutes: 0.15 }); // 9 seconds
-        chrome.tabs.onUpdated.addListener(tabUpdateListener);
+async function executeFinalAction(action) {
+    let finalMessage = "Task finished.";
+
+    if (action.action === 'manual_script') {
+        // Format the detailed instructions for the user to paste in the console
+        finalMessage = `${action.reason}\n\n**1. Open Developer Console:**\nPress \`F12\` or \`(Ctrl+Shift+I / Cmd+Opt+I)\`.\n\n**2. Paste the Code:**\nClick the 'Copy' button below and paste the entire script into the console.\n\n**3. Run It:**\nPress \`Enter\`. The script will start running on the page.\n\n\`\`\`javascript\n${action.code}\n\`\`\``;
+
+    } else if (action.action === 'execute_script') {
+        // This is now a fallback for sites without strict CSP
+        await chrome.scripting.executeScript({
+            target: { tabId: taskState.tabId },
+            world: 'MAIN',
+            func: (scriptCode) => {
+                try {
+                    const script = document.createElement('script');
+                    script.textContent = scriptCode;
+                    (document.head || document.documentElement).appendChild(script);
+                    script.remove();
+                } catch (e) { console.error("Error injecting script tag:", e); }
+            },
+            args: [action.code],
+        });
+        finalMessage = `${action.reason}. The script has been injected and is now running. Check the developer console (F12) for progress.`;
+
+    } else if (action.action === 'finish') {
+        finalMessage = action.summary;
     } else {
-        chrome.alarms.create('continueTask', { delayInMinutes: 0.05 }); // 3 seconds
+        // Fallback for extremely simple, single-step actions
+        const [injectionResult] = await chrome.scripting.executeScript({
+            target: { tabId: taskState.tabId },
+            func: executeSingleActionOnPage,
+            args: [action],
+        });
+        finalMessage = injectionResult.result || `Simple action '${action.action}' completed.`;
     }
+
+    updatePopup({ message: finalMessage, loading: false, taskStatus: 'idle' });
 }
 
-const tabUpdateListener = (tabId, changeInfo, tab) => {
-    if (tabId === taskState.tabId && changeInfo.status === 'complete' && taskState.waitingForUpdate) {
-        console.log("Page update complete. Continuing task.");
-        taskState.waitingForUpdate = false;
-        chrome.alarms.clear('pageUpdateTimeout');
-        chrome.tabs.onUpdated.removeListener(tabUpdateListener);
-        taskLoop();
-    }
-};
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'continueTask') {
-        taskLoop();
-    } else if (alarm.name === 'pageUpdateTimeout') {
-        if (taskState.waitingForUpdate) {
-            console.warn("Page update timeout reached. Continuing task anyway.");
-            taskState.waitingForUpdate = false;
-            chrome.tabs.onUpdated.removeListener(tabUpdateListener);
-            taskLoop();
-        }
-    }
-});
-
-async function executeAction(action) {
-    const [injectionResult] = await chrome.scripting.executeScript({
-        target: { tabId: taskState.tabId },
-        func: executeActionsOnPage,
-        args: [[action]],
-    });
-    return injectionResult.result;
-}
 
 function updatePopup(status) {
     chrome.runtime.sendMessage({ type: 'STATUS_UPDATE', ...status });
 }
 
-// --- Injected Functions x1 ---
+// --- Injected Functions ---
 
+// --- NEW: Highly optimized function to get page content ---
 function getPageContent() {
-    const importantTags = ['h1', 'h2', 'h3', 'label', 'button', 'a', 'input', 'textarea', 'select', '[role="button"]', '[aria-label]'];
-    let content = `URL: ${document.URL}\nTitle: ${document.title}\n\n`;
-    document.querySelectorAll(importantTags.join(',')).forEach(el => {
-        let elementInfo = `TAG: ${el.tagName}`;
-        if(el.id) elementInfo += `, ID: #${el.id}`;
-        const className = (el.className && typeof el.className === 'string') ? el.className : '';
-        if(className) elementInfo += `, CLASS: .${className.split(' ').join('.')}`;
-        if(el.name) elementInfo += `, NAME: [name="${el.name}"]`;
-        if(el.placeholder) elementInfo += `, PLACEHOLDER: "${el.placeholder}"`;
-        if(el.getAttribute('aria-label')) elementInfo += `, ARIA-LABEL: "${el.getAttribute('aria-label')}"`;
-        const text = (el.textContent || el.value || el.innerText || "").trim();
-        if(text) elementInfo += `, TEXT: "${text.substring(0, 150)}"`;
+    // This function runs on the target page to extract a highly optimized summary of the DOM.
+    const importantSelectors = [
+        'a[href]', 
+        'button', 
+        'input:not([type="hidden"])', 
+        'textarea', 
+        'select', 
+        '[role="button"]', 
+        '[role="link"]', 
+        '[role="menuitem"]', 
+        '[aria-label]:not([aria-label=""])'
+    ];
+    let content = `URL: ${document.URL}\nTitle: ${document.title}\n\n--- Interactive Elements ---\n`;
+    
+    // Use a Set to avoid duplicating elements found by multiple selectors
+    const elements = new Set(document.querySelectorAll(importantSelectors.join(',')));
+
+    for (const el of elements) {
+        // Stop if we're nearing the character limit to avoid abrupt truncation
+        if (content.length > 7500) {
+            content += "\n... (Content truncated to avoid exceeding limits)";
+            break;
+        }
+
+        let elementInfo = `<${el.tagName.toLowerCase()}`;
+        
+        // Add key attributes for identification
+        const id = el.id;
+        if (id) elementInfo += ` id="${id}"`;
+
+        const name = el.name;
+        if (name) elementInfo += ` name="${name}"`;
+        
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) elementInfo += ` aria-label="${ariaLabel}"`;
+
+        const role = el.getAttribute('role');
+        if (role) elementInfo += ` role="${role}"`;
+
+        // Extract a short, relevant text snippet, cleaning up whitespace
+        const text = (el.textContent || el.value || el.innerText || "").trim().substring(0, 60);
+        
+        elementInfo += `>${text ? text.replace(/\s+/g, ' ') : ''}</${el.tagName.toLowerCase()}>`;
+        
         content += elementInfo + '\n';
-    });
-    return content.substring(0, 8000);
+    }
+    
+    // Final hard limit
+    return content.substring(0, 8000); 
 }
 
-async function callGeminiApi(originalPrompt, historySummary, pageContent) {
+
+async function callGeminiApi(originalPrompt, pageContent, currentUrl) {
     const data = await chrome.storage.local.get(['apiKey']);
     const apiKey = data.apiKey;
     
@@ -174,38 +163,92 @@ async function callGeminiApi(originalPrompt, historySummary, pageContent) {
       return { action: "finish", summary: "API key not set. Please right-click the extension icon, go to 'Options', and set your Gemini API key." };
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-    const systemInstruction = `You are a web automation assistant. Your goal is to achieve the user's objective by breaking it down into a sequence of single actions. You will be given the user's overall goal, a summary of the most recent actions, and the current state of the web page. Your response must be a single JSON object representing the *next* action to take.
-Possible actions are:
-1. {"action": "fill", "selector": "CSS_SELECTOR", "value": "text to fill", "reason": "Why you are filling this field."}
-2. {"action": "click", "selector": "CSS_SELECTOR", "reason": "Why you are clicking this element."}
-3. {"action": "enter", "selector": "CSS_SELECTOR", "reason": "Why you are simulating an Enter key press on this element."}
-4. {"action": "read", "selector": "CSS_SELECTOR", "reason": "What information you are trying to extract."}
-5. {"action": "navigate", "url": "URL_TO_GO_TO", "reason": "Why you are navigating to this URL."}
-6. {"action": "finish", "summary": "A summary of the results or a confirmation that the task is complete."}
-Analyze the history summary and page content to decide the next logical step. If the user's goal is achieved, respond with the "finish" action. Be precise with your CSS selectors. Use IDs, aria-labels, and descriptive attributes whenever possible.`;
-    const fullPrompt = `User's Goal: ${originalPrompt}\n\nRecent History:\n${historySummary.join('\n')}\n\nCurrent Page Content:\n${pageContent}`;
+    const systemInstruction = `You are an expert web automation scripter. Your primary goal is to achieve a user's objective by writing a single, self-contained JavaScript snippet. You will receive the user's goal, the current URL, and a simplified HTML structure of the page. Your response must be a single JSON object.
+
+**CRITICAL CSP AWARENESS**
+Some websites like Facebook have a strict Content Security Policy (CSP) that will block direct script injection.
+
+- **IF the current URL contains 'facebook.com' OR you suspect a strict CSP, you MUST use the "manual_script" action.** This provides the user with code to paste into their console.
+- **Otherwise, you can use the default "execute_script" action for direct injection.**
+
+**JSON Response Formats:**
+
+**1. For Strict CSP Sites (e.g., Facebook):**
+{
+  "action": "manual_script",
+  "code": "JAVASCRIPT_CODE_STRING",
+  "reason": "A user-friendly explanation of what the script does and that manual execution is needed due to the site's security."
+}
+
+**2. For Standard Sites (Default):**
+{
+  "action": "execute_script",
+  "code": "JAVASCRIPT_CODE_STRING",
+  "reason": "A brief explanation of what the script will do."
+}
+
+**RULES FOR WRITING SCRIPTS (Apply to both formats):**
+1.  **Self-Contained:** The code MUST be an IIFE (Immediately Invoked Function Expression), like \`(async () => { /* your code here */ })();\` to avoid conflicts with the host page's scripts.
+2.  **Use Delays:** THIS IS CRITICAL. Web pages need time to react. You MUST include delays between actions. A good pattern is \`const delay = ms => new Promise(res => setTimeout(res, ms));\` and then using \`await delay(2000);\` after clicks or before checking for new elements.
+3.  **Robust Selectors:** Use specific and stable selectors. Prefer \`[aria-label="..."]\`, \`[data-testid="..."]\`, or IDs. Avoid highly generic or auto-generated class names.
+4.  **User Feedback:** Your script MUST log its progress to the console. Use \`console.log()\` to announce major steps, successes, or failures (e.g., \`console.log("✅ Clicking 'Next' button...");\`, \`console.log("🛑 Could not find login form.");\`). This is the user's only way of knowing what's happening.
+5.  **Error Handling:** Check if elements exist before interacting with them (e.g., \`if (element) { element.click(); }\`). If a critical element isn't found, log an error and stop gracefully.
+6.  **Loops & Limits:** For repetitive actions, use loops (e.g., \`for\`, \`for...of\`). Include a reasonable safety limit (e.g., \`maxItems = 100\`) to prevent infinite loops.
+
+**FALLBACK ACTIONS (Use only if a script is truly unnecessary):**
+- {"action": "finish", "summary": "Message to the user if the task is already done or cannot be done."}
+`;
+    
+    const fullPrompt = `User's Goal: "${originalPrompt}"\n\nCurrent URL: ${currentUrl}\n\n--- Current Page Content ---\n${pageContent}`;
     const payload = {
         contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
         generationConfig: { responseMimeType: "application/json" }
     };
-    const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`API Error: ${response.status} - ${errorBody}`);
+
+    try {
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            throw new Error(`API Error: ${response.status} - ${errorBody}`);
+        }
+
+        const result = await response.json();
+
+        if (!result.candidates || !result.candidates[0].content || !result.candidates[0].content.parts) {
+            console.error("Invalid API response structure:", result);
+            if (result.candidates && result.candidates[0].finishReason === 'SAFETY') {
+                 throw new Error("The request was blocked for safety reasons. Please adjust your prompt.");
+            }
+            throw new Error("Received an invalid or empty response from the API.");
+        }
+        
+        const jsonText = result.candidates[0].content.parts[0].text;
+        return JSON.parse(jsonText);
+
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            throw new Error("API request timed out after 25 seconds. The server might be busy. The page content has been simplified; please try again.");
+        }
+        throw error;
     }
-    const result = await response.json();
-    const jsonText = result.candidates[0].content.parts[0].text;
-    return JSON.parse(jsonText);
 }
 
-function executeActionsOnPage(actions) {
-    const action = actions[0];
+// Injected function for simple, one-off actions.
+function executeSingleActionOnPage(action) {
     try {
         const element = action.selector ? document.querySelector(action.selector) : null;
         if (!element && !['navigate', 'finish'].includes(action.action)) {
@@ -214,23 +257,13 @@ function executeActionsOnPage(actions) {
         switch (action.action) {
             case 'fill':
                 element.value = action.value;
-                element.dispatchEvent(new Event('input', { bubbles: true }));
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                return `Filled element ${action.selector} with "${action.value}"`;
+                return `Filled element ${action.selector}`;
             case 'click':
                 element.click();
                 return `Clicked element ${action.selector}`;
-            case 'enter':
-                element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }));
-                element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true }));
-                return `Pressed Enter on element ${action.selector}`;
-            case 'read':
-                return `Read text from ${action.selector}: "${(element.textContent || element.innerText || element.value).trim()}"`;
             case 'navigate':
                 window.location.href = action.url;
                 return `Navigating to ${action.url}`;
-            case 'finish':
-                return "Finish action received.";
         }
     } catch (error) {
         return `Error executing action: ${error.message}`;
@@ -238,3 +271,4 @@ function executeActionsOnPage(actions) {
 }
 
 // Visit cyberscap.com for more AI tools and resources!
+
