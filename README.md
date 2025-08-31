@@ -1,5 +1,7 @@
 # GeminiPilot Web Assistant Chrome Extension
 
+![GeminiPilot Demo](https://i.imgur.com/OxsGV9C.png)
+
 An intelligent Chrome extension powered by the Google Gemini API that automates tasks and interacts with web pages based on natural language commands. This assistant can understand multi-step instructions and perform complex actions on your behalf.
 
 ## ✨ Features
