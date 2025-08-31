@@ -5,7 +5,7 @@ An intelligent Chrome extension powered by the Google Gemini API that automates 
 ## ✨ Features
 
 * **Natural Language Control:** Instruct the extension to perform tasks using plain English (e.g., "Find directions from Colombo to Kandy on this map").
-* **Multi-Step Task Execution:** The assistant can break down complex commands into a sequence of actions and execute them one by one.
+* **🤖 Advanced Script Generation:** For complex or repetitive tasks (e.g., "delete all my posts"), GeminiPilot doesn't just perform single clicks. It writes and executes a complete JavaScript program to automate the entire task in one go. This is incredibly powerful and efficient. For highly secure sites like Facebook, it provides the script for you to run manually from the developer console.
 * **Dynamic Page Interaction:**
     * **Fill Forms:** Automatically fills in input fields and text areas.
     * **Click Buttons:** Clicks buttons, links, and other interactive elements.
